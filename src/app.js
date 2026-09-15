@@ -5,6 +5,13 @@ import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
 import { config } from './config/index.js';
 import { requestId, notFoundHandler, errorHandler } from './middleware/errorHandler.js';
+import authRouter from './modules/auth/auth.routes.js';
+import usersRouter from './modules/users/users.routes.js';
+import friendsRouter from './modules/friends/friends.routes.js';
+import chatsRouter from './modules/chats/chats.routes.js';
+import messagesRouter from './modules/messages/messages.routes.js';
+import notificationsRouter from './modules/notifications/notifications.routes.js';
+import settingsRouter from './modules/settings/settings.routes.js';
 
 export const app = express();
 
@@ -43,9 +50,14 @@ app.get('/health', (req, res) => {
   res.json({ success: true, data: { status: 'ok', env: config.nodeEnv } });
 });
 
-// 6. Module routers get mounted here as they're built, e.g.:
-// import authRouter from './modules/auth/auth.routes.js';
-// app.use('/api/v1/auth', authRouter);
+// 6. Module routers
+app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/users', usersRouter);
+app.use('/api/v1/friends', friendsRouter);
+app.use('/api/v1/chats', chatsRouter);
+app.use('/api/v1/messages', messagesRouter);
+app.use('/api/v1/notifications', notificationsRouter);
+app.use('/api/v1/settings', settingsRouter);
 
 // Unmatched routes
 app.use(notFoundHandler);

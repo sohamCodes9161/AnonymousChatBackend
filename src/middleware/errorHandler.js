@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto';
+import multer from 'multer';
+import mongoose from 'mongoose';
 import { AppError, ErrorCodes } from '../utils/AppError.js';
 
 /**
@@ -39,6 +41,24 @@ export function errorHandler(err, req, res, _next) {
     return res.status(err.statusCode).json({
       success: false,
       error: { code: err.code, message: err.message },
+    });
+  }
+
+  if (err instanceof multer.MulterError) {
+    console.error(`[${req.id}] ${err.code}: ${err.message}`);
+    return res.status(400).json({
+      success: false,
+      error: { code: ErrorCodes.VALIDATION_ERROR, message: err.message },
+    });
+  }
+
+  if (err instanceof mongoose.Error.CastError) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: ErrorCodes.VALIDATION_ERROR,
+        message: `Invalid ${err.path}: "${err.value}" is not a valid id`,
+      },
     });
   }
 

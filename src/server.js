@@ -3,6 +3,12 @@ import { Server as SocketIOServer } from 'socket.io';
 import { app } from './app.js';
 import { config } from './config/index.js';
 import { connectDB } from './database/connect.js';
+import { setIO } from './sockets/ioInstance.js';
+import { socketAuthMiddleware } from './sockets/authMiddleware.js';
+import { handleConnection } from './sockets/connectionHandler.js';
+import { registerRealtimeNotificationBridge } from './sockets/notificationBridge.js';
+import { registerNotificationListener } from './modules/notifications/notificationListener.js';
+import { startIncognitoSweep } from './modules/incognito/sweepJob.js';
 
 const httpServer = http.createServer(app);
 
@@ -15,13 +21,19 @@ export const io = new SocketIOServer(httpServer, {
   },
 });
 
-// Socket auth middleware and event handlers land here once the
-// Authentication and Real-Time modules are implemented, e.g.:
-// io.use(socketAuthMiddleware);
-// io.on('connection', handleConnection);
+setIO(io);
+io.use(socketAuthMiddleware);
+io.on('connection', (socket) => handleConnection(io, socket));
+
+// Both subscribe to the same domain event bus independently — order
+// between these two doesn't matter to each other, but both must come
+// after setIO(io) since the real-time bridge calls getIO() internally.
+registerRealtimeNotificationBridge();
+registerNotificationListener();
 
 async function start() {
   await connectDB();
+  startIncognitoSweep();
 
   httpServer.listen(config.port, () => {
     console.log(`Server listening on port ${config.port} (${config.nodeEnv})`);
