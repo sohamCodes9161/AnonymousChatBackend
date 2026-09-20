@@ -1,4 +1,5 @@
 import * as groupsService from './groups.service.js';
+import { AppError, ErrorCodes } from '../../utils/AppError.js';
 
 export async function removeMember(req, res, next) {
   try {
@@ -49,6 +50,22 @@ export async function leaveGroup(req, res, next) {
   try {
     await groupsService.leaveGroup(req.user.id, req.params.chatId);
     res.json({ success: true, data: { left: true } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function uploadGroupAvatar(req, res, next) {
+  try {
+    if (!req.file) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        'No file uploaded — send it as form-data with field name "avatar"',
+        400
+      );
+    }
+    const chat = await groupsService.updateGroupAvatar(req.user.id, req.params.chatId, req.file.buffer);
+    res.json({ success: true, data: { chat } });
   } catch (err) {
     next(err);
   }

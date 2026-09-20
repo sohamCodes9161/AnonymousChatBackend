@@ -1,4 +1,5 @@
 import { ChatMember } from '../modules/chats/chatMember.model.js';
+import { User } from '../modules/users/user.model.js';
 import * as friendsService from '../modules/friends/friends.service.js';
 import { reevaluateIncognitoPresence } from '../modules/incognito/incognito.service.js';
 import { addConnection, removeConnection } from './presence.js';
@@ -67,6 +68,7 @@ export async function handleConnection(io, socket) {
 
     const justWentOffline = removeConnection(userId, socket.id);
     if (justWentOffline) {
+      await User.findByIdAndUpdate(userId, { lastSeenAt: new Date() });
       await broadcastPresenceToFriends(io, userId, 'presence:offline');
       // Presence dropping might trigger a grace period on any chat
       // this user belongs to — reevaluate all of them.

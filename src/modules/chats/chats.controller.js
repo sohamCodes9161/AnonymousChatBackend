@@ -98,3 +98,30 @@ export async function unarchiveChat(req, res, next) {
     next(err);
   }
 }
+
+export async function pinChat(req, res, next) {
+  try {
+    const member = await chatsService.pinChat(req.user.id, req.params.chatId);
+    res.json({ success: true, data: { member } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function unpinChat(req, res, next) {
+  try {
+    const member = await chatsService.unpinChat(req.user.id, req.params.chatId);
+    res.json({ success: true, data: { member } });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function clearChat(req, res, next) {
+  try {
+    const member = await chatsService.clearChat(req.user.id, req.params.chatId);
+    res.json({ success: true, data: { member } });
+  } catch (err) {
+    next(err);
+  }
+}

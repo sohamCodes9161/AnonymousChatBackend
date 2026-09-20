@@ -5,6 +5,7 @@ import * as groupsController from '../groups/groups.controller.js';
 import * as incognitoController from '../incognito/incognito.controller.js';
 import { authenticate } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
+import { avatarUpload } from '../../middleware/upload.js';
 import {
   createDirectChatSchema,
   createGroupChatSchema,
@@ -24,6 +25,7 @@ router.post('/group', validate(createGroupChatSchema), chatsController.createGro
 router.get('/', chatsController.listMyChats);
 router.get('/:chatId', chatsController.getChat);
 router.patch('/:chatId', validate(updateGroupInfoSchema), groupsController.updateGroupInfo);
+router.post('/:chatId/avatar', avatarUpload, groupsController.uploadGroupAvatar);
 router.delete('/:chatId', groupsController.deleteGroup);
 router.post('/:chatId/leave', groupsController.leaveGroup);
 router.get('/:chatId/members', chatsController.listMembers);
@@ -36,6 +38,9 @@ router.post('/:chatId/mute', validate(muteSchema), chatsController.muteChat);
 router.post('/:chatId/unmute', chatsController.unmuteChat);
 router.post('/:chatId/archive', chatsController.archiveChat);
 router.post('/:chatId/unarchive', chatsController.unarchiveChat);
+router.post('/:chatId/pin', chatsController.pinChat);
+router.post('/:chatId/unpin', chatsController.unpinChat);
+router.post('/:chatId/clear', chatsController.clearChat);
 router.get('/:chatId/incognito', incognitoController.getStatus);
 router.post('/:chatId/incognito/start', incognitoController.start);
 router.post('/:chatId/incognito/end', incognitoController.end);

@@ -76,13 +76,18 @@ export async function sendMessage(userId, chatId, { type = 'text', content, clie
 }
 
 export async function listMessages(userId, chatId, { before, limit = 50 } = {}) {
-  await chatsService.assertMembership(chatId, userId);
+  const member = await chatsService.assertMembership(chatId, userId);
 
   const query = { chatId };
   if (before) {
     // ObjectId is time-ordered by construction — works directly as a
     // cursor without a separate sequence field.
     query._id = { $lt: before };
+  }
+  if (member.clearedBefore) {
+    // "Clear chat for me" — a per-viewer filter, not a data deletion.
+    // Only this member's own query is restricted; nothing else changes.
+    query.createdAt = { ...(query.createdAt || {}), $gte: member.clearedBefore };
   }
 
   const cappedLimit = Math.min(limit, 100);

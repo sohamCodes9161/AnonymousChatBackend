@@ -8,6 +8,7 @@ const chatSchema = new mongoose.Schema(
     // the UI is derived from the other participant's profile instead.
     name: { type: String, default: null, maxlength: 100 },
     avatarUrl: { type: String, default: null },
+    avatarPublicId: { type: String, default: null },
     description: { type: String, default: null, maxlength: 300 },
 
     lastActivity: { type: Date, default: Date.now },

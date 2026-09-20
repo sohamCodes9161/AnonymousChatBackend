@@ -9,4 +9,10 @@ export const updateSettingsSchema = z.object({
       groupEvents: z.boolean().optional(),
     })
     .optional(),
+  privacy: z
+    .object({
+      lastSeenVisibility: z.enum(['everyone', 'friends', 'nobody']).optional(),
+      readReceiptsEnabled: z.boolean().optional(),
+    })
+    .optional(),
 });

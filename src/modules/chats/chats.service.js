@@ -3,6 +3,7 @@ import { Chat } from './chat.model.js';
 import { ChatMember } from './chatMember.model.js';
 import { Message } from '../messages/message.model.js';
 import { User } from '../users/user.model.js';
+import { UserSettings } from '../settings/userSettings.model.js';
 import { createSystemMessage } from '../messages/systemMessage.js';
 import { domainEventBus } from '../../events/domainEventBus.js';
 import { getIO } from '../../sockets/ioInstance.js';
@@ -145,7 +146,19 @@ export async function listMyChats(userId) {
   const memberships = await ChatMember.find({ userId, leftAt: null });
   const membershipByChat = new Map(memberships.map((m) => [m.chatId.toString(), m]));
   const chatIds = memberships.map((m) => m.chatId);
-  const chats = await Chat.find({ _id: { $in: chatIds } }).sort({ lastActivity: -1 });
+  const chats = await Chat.find({ _id: { $in: chatIds } });
+
+  // Pinned first (most recently pinned first), then the rest by
+  // activity — sorted here rather than in the DB query since it's a
+  // small in-memory list per user, not worth a compound index for.
+  chats.sort((a, b) => {
+    const aPinned = membershipByChat.get(a._id.toString())?.pinnedAt;
+    const bPinned = membershipByChat.get(b._id.toString())?.pinnedAt;
+    if (aPinned && bPinned) return bPinned - aPinned;
+    if (aPinned) return -1;
+    if (bPinned) return 1;
+    return b.lastActivity - a.lastActivity;
+  });
 
   // For direct chats specifically: resolve the OTHER participant's
   // profile AND their current read position (lastReadMessageId) — the
@@ -155,12 +168,41 @@ export async function listMyChats(userId) {
   const otherMembers = await ChatMember.find({
     chatId: { $in: directChatIds },
     userId: { $ne: userId },
-  }).populate('userId', 'username displayName avatarUrl');
+  }).populate('userId', 'username displayName avatarUrl lastSeenAt');
   const otherUserByChat = new Map(
     otherMembers.map((m) => [
       m.chatId.toString(),
       { ...m.userId.toObject(), lastReadMessageId: m.lastReadMessageId },
     ])
+  );
+
+  // Privacy: batch-fetch settings for the current user (their own
+  // read-receipts opt-in matters too — standard convention, turning
+  // yours off also hides others') and every other participant.
+  const otherUserIds = [...otherUserByChat.values()].map((u) => u._id.toString());
+  const settingsRows = await UserSettings.find({ userId: { $in: [userId, ...otherUserIds] } });
+  const settingsByUserId = new Map(settingsRows.map((s) => [s.userId.toString(), s]));
+  const myReadReceiptsEnabled = settingsByUserId.get(userId)?.privacy?.readReceiptsEnabled ?? true;
+
+  // 'friends' visibility tier needs a relationship lookup — resolved
+  // here, as a pre-pass, so the final map below stays synchronous and
+  // never has to smuggle intermediate state through the return value.
+  const friendsTierChatIds = [];
+  for (const [chatIdStr, otherUser] of otherUserByChat.entries()) {
+    const visibility = settingsByUserId.get(otherUser._id.toString())?.privacy?.lastSeenVisibility;
+    if (visibility === 'friends') friendsTierChatIds.push(chatIdStr);
+  }
+  const friendsTierResolved = new Map(
+    await Promise.all(
+      friendsTierChatIds.map(async (chatIdStr) => {
+        const otherUser = otherUserByChat.get(chatIdStr);
+        const relationship = await friendsService.getRelationshipStatus(
+          userId,
+          otherUser._id.toString()
+        );
+        return [chatIdStr, relationship.status === 'friends' ? otherUser.lastSeenAt : null];
+      })
+    )
   );
 
   // Group chats: resolve who sent the last message, so the sidebar can
@@ -172,12 +214,39 @@ export async function listMyChats(userId) {
   const senderNameById = new Map(senders.map((u) => [u._id.toString(), u.displayName]));
 
   return chats.map((chat) => {
-    const membership = membershipByChat.get(chat._id.toString());
-    const otherUser = chat.type === 'direct' ? otherUserByChat.get(chat._id.toString()) : null;
+    const chatIdStr = chat._id.toString();
+    const membership = membershipByChat.get(chatIdStr);
+    const otherUser = chat.type === 'direct' ? otherUserByChat.get(chatIdStr) : null;
     const lastMessageSenderName =
       chat.type === 'group' && chat.lastMessageSenderId
         ? senderNameById.get(chat.lastMessageSenderId.toString()) || null
         : null;
+
+    let otherParticipant = null;
+    if (otherUser) {
+      const otherSettings = settingsByUserId.get(otherUser._id.toString());
+      const theirReadReceiptsEnabled = otherSettings?.privacy?.readReceiptsEnabled ?? true;
+      const lastSeenVisibility = otherSettings?.privacy?.lastSeenVisibility ?? 'everyone';
+
+      const lastSeenAt =
+        lastSeenVisibility === 'everyone'
+          ? otherUser.lastSeenAt
+          : lastSeenVisibility === 'friends'
+            ? friendsTierResolved.get(chatIdStr) ?? null
+            : null; // 'nobody'
+
+      otherParticipant = {
+        id: otherUser._id,
+        username: otherUser.username,
+        displayName: otherUser.displayName,
+        avatarUrl: otherUser.avatarUrl,
+        // Symmetric — visible only if BOTH sides have receipts enabled,
+        // same rule WhatsApp uses to prevent one-sided snooping.
+        lastReadMessageId:
+          myReadReceiptsEnabled && theirReadReceiptsEnabled ? otherUser.lastReadMessageId : null,
+        lastSeenAt,
+      };
+    }
 
     return {
       ...chat.toObject(),
@@ -186,16 +255,9 @@ export async function listMyChats(userId) {
         lastReadMessageId: membership.lastReadMessageId,
         mutedUntil: membership.mutedUntil,
         archivedAt: membership.archivedAt,
+        pinnedAt: membership.pinnedAt,
       },
-      otherParticipant: otherUser
-        ? {
-            id: otherUser._id,
-            username: otherUser.username,
-            displayName: otherUser.displayName,
-            avatarUrl: otherUser.avatarUrl,
-            lastReadMessageId: otherUser.lastReadMessageId,
-          }
-        : null,
+      otherParticipant,
       lastMessageSenderName,
     };
   });
@@ -263,6 +325,33 @@ export async function archiveChat(userId, chatId) {
 export async function unarchiveChat(userId, chatId) {
   const member = await assertMembership(chatId, userId);
   member.archivedAt = null;
+  await member.save();
+  return member;
+}
+
+export async function pinChat(userId, chatId) {
+  const member = await assertMembership(chatId, userId);
+  member.pinnedAt = new Date();
+  await member.save();
+  return member;
+}
+
+export async function unpinChat(userId, chatId) {
+  const member = await assertMembership(chatId, userId);
+  member.pinnedAt = null;
+  await member.save();
+  return member;
+}
+
+/**
+ * "Clear chat for me" — sets a per-viewer timestamp, not a data
+ * deletion. Messages/systems messages before this point are hidden
+ * from this member's own message list query; the other participant(s)
+ * and the underlying Message documents are completely unaffected.
+ */
+export async function clearChat(userId, chatId) {
+  const member = await assertMembership(chatId, userId);
+  member.clearedBefore = new Date();
   await member.save();
   return member;
 }

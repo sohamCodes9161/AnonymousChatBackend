@@ -12,6 +12,12 @@ const chatMemberSchema = new mongoose.Schema(
     leftAt: { type: Date, default: null },
     mutedUntil: { type: Date, default: null },
     archivedAt: { type: Date, default: null },
+    pinnedAt: { type: Date, default: null },
+    // "Clear chat for me" — a per-viewer filter, not data deletion.
+    // Messages before this timestamp are hidden from THIS member's
+    // view only; the other participant(s) and the underlying data are
+    // completely unaffected.
+    clearedBefore: { type: Date, default: null },
     lastReadMessageId: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
   },
   { timestamps: true }

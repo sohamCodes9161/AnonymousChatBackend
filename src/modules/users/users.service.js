@@ -1,6 +1,6 @@
 import { fileTypeFromBuffer } from 'file-type';
 import { User } from './user.model.js';
-import { uploadAvatarBuffer, deleteAsset } from '../../utils/cloudinary.js';
+import { uploadImageBuffer, deleteAsset } from '../../utils/cloudinary.js';
 import * as friendsService from '../friends/friends.service.js';
 import { AppError, ErrorCodes } from '../../utils/AppError.js';
 
@@ -50,7 +50,7 @@ export async function uploadAvatar(userId, fileBuffer) {
     );
   }
 
-  const result = await uploadAvatarBuffer(userId, fileBuffer);
+  const result = await uploadImageBuffer(`avatars/${userId}`, fileBuffer);
   const oldPublicId = user.avatarPublicId;
 
   user.avatarUrl = result.secure_url;

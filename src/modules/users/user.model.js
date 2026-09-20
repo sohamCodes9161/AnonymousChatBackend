@@ -20,6 +20,12 @@ const userSchema = new mongoose.Schema(
     avatarUrl: { type: String, default: null },
     avatarPublicId: { type: String, default: null },
     bio: { type: String, default: '', maxlength: 200 },
+    // Updated on disconnect (Real-Time System). Deliberately NOT in
+    // toPublicJSON — visibility is gated by the viewer's relationship
+    // and the owner's own privacy setting, resolved where it's
+    // actually displayed (chats.service.js), not blindly serialized
+    // on every user object everywhere.
+    lastSeenAt: { type: Date, default: null },
 
     // Login rate-limiting / brute-force protection (Security module)
     failedLoginAttempts: { type: Number, default: 0 },

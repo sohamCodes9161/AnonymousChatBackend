@@ -1,9 +1,13 @@
+import { fileTypeFromBuffer } from 'file-type';
 import { Chat } from '../chats/chat.model.js';
 import { ChatMember } from '../chats/chatMember.model.js';
 import * as chatsService from '../chats/chats.service.js';
 import { createSystemMessage } from '../messages/systemMessage.js';
 import { domainEventBus } from '../../events/domainEventBus.js';
+import { uploadImageBuffer, deleteAsset } from '../../utils/cloudinary.js';
 import { AppError, ErrorCodes } from '../../utils/AppError.js';
+
+const ALLOWED_AVATAR_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 async function getGroupChat(chatId) {
   const chat = await Chat.findById(chatId);
@@ -93,6 +97,34 @@ export async function updateGroupInfo(currentUserId, chatId, updates) {
 
   const chat = await Chat.findByIdAndUpdate(chatId, updates, { new: true, runValidators: true });
   await createSystemMessage(chatId, 'group_info_updated', { updatedFields: Object.keys(updates) });
+  return chat;
+}
+
+export async function updateGroupAvatar(currentUserId, chatId, fileBuffer) {
+  const chat = await getGroupChat(chatId);
+  await requireRole(chatId, currentUserId, ['admin', 'owner']);
+
+  const detected = await fileTypeFromBuffer(fileBuffer);
+  if (!detected || !ALLOWED_AVATAR_MIME_TYPES.includes(detected.mime)) {
+    throw new AppError(
+      ErrorCodes.VALIDATION_ERROR,
+      'File content does not match an allowed image type (JPEG, PNG, WEBP)',
+      400
+    );
+  }
+
+  const result = await uploadImageBuffer(`group-avatars/${chatId}`, fileBuffer);
+  const oldPublicId = chat.avatarPublicId;
+
+  chat.avatarUrl = result.secure_url;
+  chat.avatarPublicId = result.public_id;
+  await chat.save();
+
+  if (oldPublicId) {
+    deleteAsset(oldPublicId); // fire-and-forget, already swallows its own errors
+  }
+
+  await createSystemMessage(chatId, 'group_info_updated', { updatedFields: ['avatarUrl'] });
   return chat;
 }
 

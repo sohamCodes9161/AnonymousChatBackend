@@ -10,18 +10,16 @@ cloudinary.config({
 /**
  * Uploads a file buffer directly to Cloudinary from the server —
  * the file never touches local disk (multer uses memory storage),
- * and the client never talks to Cloudinary directly. Scoped to a
- * per-user folder so avatars are namespaced by owner.
+ * and the client never talks to Cloudinary directly. `folder` scopes
+ * the asset (e.g. `avatars/{userId}` for a user, `group-avatars/{chatId}`
+ * for a group) — same function, two callers.
  */
-export function uploadAvatarBuffer(userId, buffer) {
+export function uploadImageBuffer(folder, buffer) {
   return new Promise((resolve, reject) => {
-    const uploadStream = cloudinary.uploader.upload_stream(
-      { folder: `avatars/${userId}` },
-      (error, result) => {
-        if (error) return reject(error);
-        resolve(result);
-      }
-    );
+    const uploadStream = cloudinary.uploader.upload_stream({ folder }, (error, result) => {
+      if (error) return reject(error);
+      resolve(result);
+    });
     uploadStream.end(buffer);
   });
 }
