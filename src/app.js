@@ -15,6 +15,15 @@ import settingsRouter from './modules/settings/settings.routes.js';
 
 export const app = express();
 
+// Render (and Vercel's rewrite proxy, for the auth routes) sits in
+// front of this server, so Express sees every request as coming from
+// that proxy's internal IP over plain HTTP unless told to trust the
+// X-Forwarded-* headers it sets. Without this, express-rate-limit
+// effectively buckets every single user together (and warns about it),
+// and req.secure/req.ip are wrong. `1` trusts exactly one hop, matching
+// Render's/Vercel's setup — not a blanket trust of arbitrary proxies.
+app.set('trust proxy', 1);
+
 // 1. Request ID — first, so every subsequent log line can be correlated
 app.use(requestId);
 
