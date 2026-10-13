@@ -15,9 +15,11 @@ const messageSchema = new mongoose.Schema(
     // active on this chat at send-time. Null = ordinary message.
     incognitoSessionId: { type: mongoose.Schema.Types.ObjectId, default: null },
 
-    type: { type: String, enum: ['text', 'system'], default: 'text' },
-    // Shape varies by type — { text } for now. Extensible later
-    // (image/attachment metadata etc.) without a schema migration.
+    type: { type: String, enum: ['text', 'system', 'image'], default: 'text' },
+    // Shape varies by type — { text } for text, { imageUrl, caption }
+    // for image. Extensible later (file/voice attachments etc.)
+    // without a schema migration — this is exactly the flexibility the
+    // Mixed type was chosen for.
     content: { type: mongoose.Schema.Types.Mixed, required: true },
 
     replyToMessageId: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },

@@ -37,8 +37,24 @@ export const config = {
   },
 
   cookie: {
-    domain: process.env.COOKIE_DOMAIN || 'localhost',
-    secure: process.env.COOKIE_SECURE === 'true',
+    // Deliberately no 'localhost' fallback. A cookie's Domain attribute
+    // can only broaden scope to a PARENT domain of the host that set it —
+    // it can never point at an unrelated host. Render (backend) and
+    // Vercel (frontend) share no common parent domain, so the only
+    // correct value here in that setup is "unset": leaving Domain off
+    // the Set-Cookie header makes the browser default it to the exact
+    // host that issued the cookie, which is what we want. Only set
+    // COOKIE_DOMAIN at all if backend and frontend are deployed under
+    // a shared parent domain (e.g. api.example.com + app.example.com
+    // -> COOKIE_DOMAIN=.example.com).
+    domain: process.env.COOKIE_DOMAIN || undefined,
+    // SameSite=None (which production requires, below) is only honored
+    // by browsers when Secure is also set — an insecure COOKIE_SECURE
+    // env var in production would silently break the cookie the same
+    // way the domain mismatch did, so production always forces this on
+    // regardless of the env var; the env var only matters for local dev.
+    secure:
+      process.env.NODE_ENV === 'production' || process.env.COOKIE_SECURE === 'true',
   },
 
   argon2: {

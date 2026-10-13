@@ -13,3 +13,7 @@ export const sendMessageSchema = z.object({
 export const editMessageSchema = z.object({
   content: z.object({ text: z.string().min(1).max(5000) }),
 });
+
+export const reactionSchema = z.object({
+  emoji: z.string().min(1).max(8),
+});

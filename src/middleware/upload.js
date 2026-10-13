@@ -26,3 +26,11 @@ export const avatarUpload = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
   fileFilter,
 }).single('avatar'); // form field name the client must use
+
+// Message attachments get more headroom than avatars — a photo shared
+// in chat is reasonably expected to be larger than a profile picture.
+export const messageImageUpload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter,
+}).single('image');

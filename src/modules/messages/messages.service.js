@@ -1,10 +1,42 @@
+import { fileTypeFromBuffer } from 'file-type';
 import { Message } from './message.model.js';
 import { Chat } from '../chats/chat.model.js';
 import { ChatMember } from '../chats/chatMember.model.js';
 import * as chatsService from '../chats/chats.service.js';
 import * as friendsService from '../friends/friends.service.js';
+import { uploadImageBuffer } from '../../utils/cloudinary.js';
+import { getReactionSummaryForMessages } from './reactions.service.js';
 import { getIO } from '../../sockets/ioInstance.js';
 import { AppError, ErrorCodes } from '../../utils/AppError.js';
+
+const ALLOWED_IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+/**
+ * Blocking never touches ChatMember, so an existing direct chat's
+ * membership stays valid even after a block — this is the check that
+ * actually stops new messages. Group chats are unaffected: blocking
+ * doesn't remove someone from a shared group (Friend System design,
+ * "not retroactive"). Shared between sendMessage and sendImageMessage
+ * so the rule lives in exactly one place.
+ */
+async function assertNotBlocked(userId, chatId, chat) {
+  if (chat.type !== 'direct') return;
+
+  const otherMember = await ChatMember.findOne({ chatId, userId: { $ne: userId }, leftAt: null });
+  if (!otherMember) return;
+
+  const relationship = await friendsService.getRelationshipStatus(userId, otherMember.userId.toString());
+  if (relationship.status === 'blocked_by_me' || relationship.status === 'blocked_by_them') {
+    throw new AppError(ErrorCodes.CHAT_NOT_FRIENDS, 'Cannot send messages in this conversation', 403);
+  }
+}
+
+function updateChatPreview(chat, userId, message, previewText) {
+  chat.lastActivity = new Date();
+  chat.lastMessageId = message._id;
+  chat.lastMessageSenderId = userId;
+  chat.lastMessagePreview = previewText;
+}
 
 export async function sendMessage(userId, chatId, { type = 'text', content, clientMessageId, replyToMessageId }) {
   await chatsService.assertMembership(chatId, userId);
@@ -26,31 +58,7 @@ export async function sendMessage(userId, chatId, { type = 'text', content, clie
     throw new AppError(ErrorCodes.NOT_FOUND, 'Chat not found', 404);
   }
 
-  // Blocking never touches ChatMember, so an existing direct chat's
-  // membership stays valid even after a block — this is the check that
-  // actually stops new messages. Group chats are unaffected: blocking
-  // doesn't remove someone from a shared group (Friend System design,
-  // "not retroactive").
-  if (chat.type === 'direct') {
-    const otherMember = await ChatMember.findOne({
-      chatId,
-      userId: { $ne: userId },
-      leftAt: null,
-    });
-    if (otherMember) {
-      const relationship = await friendsService.getRelationshipStatus(
-        userId,
-        otherMember.userId.toString()
-      );
-      if (relationship.status === 'blocked_by_me' || relationship.status === 'blocked_by_them') {
-        throw new AppError(
-          ErrorCodes.CHAT_NOT_FRIENDS,
-          'Cannot send messages in this conversation',
-          403
-        );
-      }
-    }
-  }
+  await assertNotBlocked(userId, chatId, chat);
 
   const message = await Message.create({
     chatId,
@@ -62,15 +70,49 @@ export async function sendMessage(userId, chatId, { type = 'text', content, clie
     incognitoSessionId: chat.activeIncognitoSessionId || null,
   });
 
-  // Denormalized chat-list preview — updated on every send so the
-  // chat list never needs to join against Messages to render itself.
-  chat.lastActivity = new Date();
-  chat.lastMessageId = message._id;
-  chat.lastMessageSenderId = userId;
-  chat.lastMessagePreview = type === 'text' ? String(content?.text || '').slice(0, 100) : `[${type}]`;
+  updateChatPreview(chat, userId, message, type === 'text' ? String(content?.text || '').slice(0, 100) : `[${type}]`);
   await chat.save();
 
-  getIO().to(chatId.toString()).emit('message:new', message.toPublicJSON());
+  getIO().to(chatId.toString()).emit('message:new', { ...message.toPublicJSON(), reactions: [] });
+
+  return message;
+}
+
+export async function sendImageMessage(userId, chatId, fileBuffer, caption) {
+  await chatsService.assertMembership(chatId, userId);
+
+  const chat = await Chat.findById(chatId);
+  if (!chat) {
+    throw new AppError(ErrorCodes.NOT_FOUND, 'Chat not found', 404);
+  }
+
+  await assertNotBlocked(userId, chatId, chat);
+
+  // Same magic-byte rule as every other upload in this app — never
+  // trust the client-declared Content-Type header.
+  const detected = await fileTypeFromBuffer(fileBuffer);
+  if (!detected || !ALLOWED_IMAGE_MIME_TYPES.includes(detected.mime)) {
+    throw new AppError(
+      ErrorCodes.VALIDATION_ERROR,
+      'File content does not match an allowed image type (JPEG, PNG, WEBP)',
+      400
+    );
+  }
+
+  const result = await uploadImageBuffer(`message-attachments/${chatId}`, fileBuffer);
+
+  const message = await Message.create({
+    chatId,
+    senderId: userId,
+    type: 'image',
+    content: { imageUrl: result.secure_url, caption: caption || null },
+    incognitoSessionId: chat.activeIncognitoSessionId || null,
+  });
+
+  updateChatPreview(chat, userId, message, '📷 Photo');
+  await chat.save();
+
+  getIO().to(chatId.toString()).emit('message:new', { ...message.toPublicJSON(), reactions: [] });
 
   return message;
 }
@@ -80,13 +122,9 @@ export async function listMessages(userId, chatId, { before, limit = 50 } = {}) 
 
   const query = { chatId };
   if (before) {
-    // ObjectId is time-ordered by construction — works directly as a
-    // cursor without a separate sequence field.
     query._id = { $lt: before };
   }
   if (member.clearedBefore) {
-    // "Clear chat for me" — a per-viewer filter, not a data deletion.
-    // Only this member's own query is restricted; nothing else changes.
     query.createdAt = { ...(query.createdAt || {}), $gte: member.clearedBefore };
   }
 
@@ -96,9 +134,30 @@ export async function listMessages(userId, chatId, { before, limit = 50 } = {}) 
   const hasMore = rows.length > cappedLimit;
   const page = hasMore ? rows.slice(0, cappedLimit) : rows;
   const nextCursor = hasMore ? page[page.length - 1]._id : null;
+  const messages = page.reverse();
 
-  // Reversed so the client renders oldest-to-newest without re-sorting.
-  return { messages: page.reverse(), nextCursor, hasMore };
+  const reactionsByMessageId = await getReactionSummaryForMessages(
+    messages.map((m) => m._id.toString()),
+    userId
+  );
+
+  return { messages, reactionsByMessageId, nextCursor, hasMore };
+}
+
+export async function searchMessages(userId, chatId, query) {
+  await chatsService.assertMembership(chatId, userId);
+
+  const trimmed = (query || '').trim();
+  if (trimmed.length < 2) return [];
+
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return Message.find({
+    chatId,
+    status: { $ne: 'deleted' },
+    'content.text': { $regex: escaped, $options: 'i' },
+  })
+    .sort({ _id: -1 })
+    .limit(50);
 }
 
 export async function editMessage(userId, messageId, content) {
@@ -129,7 +188,6 @@ export async function deleteMessage(userId, messageId) {
     throw new AppError(ErrorCodes.AUTH_UNAUTHORIZED, 'Not authorized to delete this message', 403);
   }
 
-  // Soft delete — row stays for reply-thread integrity, content stripped.
   message.status = 'deleted';
   message.deletedAt = new Date();
   message.content = { text: null };

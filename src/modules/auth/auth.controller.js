@@ -58,7 +58,15 @@ export async function logout(req, res, next) {
   try {
     const raw = req.cookies?.refreshToken;
     await authService.logout(raw);
-    res.clearCookie('refreshToken', { path: '/api/v1/auth' });
+    // clearCookie must be called with the SAME attributes (domain,
+    // sameSite, secure, path) used when the cookie was set, or the
+    // browser treats it as a different cookie and won't actually clear it.
+    res.clearCookie('refreshToken', {
+      path: '/api/v1/auth',
+      domain: config.cookie.domain,
+      sameSite: config.isProduction ? 'none' : 'lax',
+      secure: config.cookie.secure,
+    });
     res.json({ success: true, data: { loggedOut: true } });
   } catch (err) {
     next(err);

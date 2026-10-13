@@ -5,7 +5,7 @@ import * as groupsController from '../groups/groups.controller.js';
 import * as incognitoController from '../incognito/incognito.controller.js';
 import { authenticate } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
-import { avatarUpload } from '../../middleware/upload.js';
+import { avatarUpload, messageImageUpload } from '../../middleware/upload.js';
 import {
   createDirectChatSchema,
   createGroupChatSchema,
@@ -48,6 +48,8 @@ router.post('/:chatId/incognito/end', incognitoController.end);
 // Messages nested under their chat for send/list — edit/delete act on
 // a message directly, those live in messages.routes.js instead.
 router.post('/:chatId/messages', validate(sendMessageSchema), messagesController.sendMessage);
+router.post('/:chatId/messages/image', messageImageUpload, messagesController.sendImageMessage);
 router.get('/:chatId/messages', messagesController.listMessages);
+router.get('/:chatId/messages/search', messagesController.searchMessages);
 
 export default router;
