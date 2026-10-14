@@ -145,19 +145,27 @@ export async function listMessages(userId, chatId, { before, limit = 50 } = {}) 
 }
 
 export async function searchMessages(userId, chatId, query) {
-  await chatsService.assertMembership(chatId, userId);
+  const member = await chatsService.assertMembership(chatId, userId);
 
   const trimmed = (query || '').trim();
   if (trimmed.length < 2) return [];
 
   const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return Message.find({
+  const filter = {
     chatId,
     status: { $ne: 'deleted' },
-    'content.text': { $regex: escaped, $options: 'i' },
-  })
-    .sort({ _id: -1 })
-    .limit(50);
+    // Text messages match on text; photo messages on their caption.
+    $or: [
+      { 'content.text': { $regex: escaped, $options: 'i' } },
+      { 'content.caption': { $regex: escaped, $options: 'i' } },
+    ],
+  };
+  // Same boundary listMessages applies — "clear chat for me" must hide
+  // history from search too, not just from the message list.
+  if (member.clearedBefore) {
+    filter.createdAt = { $gte: member.clearedBefore };
+  }
+  return Message.find(filter).sort({ _id: -1 }).limit(50);
 }
 
 export async function editMessage(userId, messageId, content) {

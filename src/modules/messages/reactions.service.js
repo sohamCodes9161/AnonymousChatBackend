@@ -30,7 +30,11 @@ export async function toggleReaction(userId, messageId, emoji) {
   const reactionsByMessageId = await getReactionSummaryForMessages([messageId], userId);
   const reactions = reactionsByMessageId[messageId] || [];
 
-  getIO().to(chatId).emit('message:reaction', { chatId, messageId, reactions });
+  // `reactedByMe` inside this summary is computed for the ACTOR, not for
+  // whoever receives the broadcast — so the actor's id travels with the
+  // event, and each client only trusts reactedByMe when the actor is
+  // itself (otherwise it keeps its own locally-known value per emoji).
+  getIO().to(chatId).emit('message:reaction', { chatId, messageId, userId, reactions });
 
   return reactions;
 }
