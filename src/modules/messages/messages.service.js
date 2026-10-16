@@ -142,7 +142,7 @@ export async function sendImageMessage(userId, chatId, fileBuffer, caption) {
 export async function listMessages(userId, chatId, { before, limit = 50 } = {}) {
   const member = await chatsService.assertMembership(chatId, userId);
 
-  const query = { chatId };
+  const query = { chatId, deletedFor: { $ne: userId } };
   if (before) {
     query._id = { $lt: before };
   }
@@ -176,6 +176,7 @@ export async function searchMessages(userId, chatId, query) {
   const filter = {
     chatId,
     status: { $ne: 'deleted' },
+    deletedFor: { $ne: userId },
     // Text messages match on text; photo messages on their caption.
     $or: [
       { 'content.text': { $regex: escaped, $options: 'i' } },
@@ -213,6 +214,24 @@ export async function editMessage(userId, messageId, content) {
   getIO().to(message.chatId.toString()).emit('message:edited', message.toPublicJSON());
 
   return message;
+}
+
+/**
+ * "Delete for me": hides messages from this user's view only. Nothing is
+ * removed and nobody else is notified; the user's other open tabs/devices
+ * are told so their lists update too. Works on anyone's messages (it's
+ * only a personal hide), but is scoped to the chat the caller belongs to.
+ */
+export async function deleteMessagesForMe(userId, chatId, messageIds) {
+  await chatsService.assertMembership(chatId, userId);
+
+  const result = await Message.updateMany(
+    { _id: { $in: messageIds }, chatId },
+    { $addToSet: { deletedFor: userId } }
+  );
+
+  getIO().to(`user:${userId}`).emit('message:hidden', { chatId, messageIds });
+  return result.modifiedCount;
 }
 
 export async function deleteMessage(userId, messageId) {

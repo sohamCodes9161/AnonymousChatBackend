@@ -2,7 +2,7 @@ import { ChatMember } from '../modules/chats/chatMember.model.js';
 import { User } from '../modules/users/user.model.js';
 import * as friendsService from '../modules/friends/friends.service.js';
 import { reevaluateIncognitoPresence } from '../modules/incognito/incognito.service.js';
-import { addConnection, removeConnection } from './presence.js';
+import { addConnection, removeConnection, isOnline } from './presence.js';
 
 const TYPING_TTL_MS = 5000;
 
@@ -14,6 +14,15 @@ async function broadcastPresenceToFriends(io, userId, event) {
   friends.forEach((friend) => {
     io.to(`user:${friend._id}`).emit(event, { userId });
   });
+}
+
+// Which of this user's friends are online right now. Presence events only
+// fire on transitions, so without this a client that connects AFTER a
+// friend came online would show them as offline until they reconnect.
+async function sendPresenceSnapshot(socket, userId) {
+  const friends = await friendsService.listFriends(userId);
+  const onlineUserIds = friends.map((f) => f._id.toString()).filter((id) => isOnline(id));
+  socket.emit('presence:snapshot', { onlineUserIds });
 }
 
 export async function handleConnection(io, socket) {
@@ -43,6 +52,14 @@ export async function handleConnection(io, socket) {
   // Per-socket typing timers — cleared on renewal, so the TTL is the
   // real source of truth, not an explicit stop event (Real-Time design).
   const typingTimers = new Map();
+
+  // Clients ask for a snapshot once their listeners are bound (and again
+  // after every reconnect), so it can't be missed by a race on connect.
+  socket.on('presence:request', () => {
+    sendPresenceSnapshot(socket, userId).catch((err) =>
+      console.error('presence snapshot failed:', err.message)
+    );
+  });
 
   socket.on('typing:start', ({ chatId }) => {
     if (!socket.rooms.has(chatId)) return; // not a member — silently ignore

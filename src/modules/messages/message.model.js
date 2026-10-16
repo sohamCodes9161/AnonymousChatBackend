@@ -23,6 +23,10 @@ const messageSchema = new mongoose.Schema(
     content: { type: mongoose.Schema.Types.Mixed, required: true },
 
     replyToMessageId: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
+
+    // "Delete for me": users who have hidden this message from their own
+    // view. The row stays for everyone else; never exposed to clients.
+    deletedFor: { type: [{ type: mongoose.Schema.Types.ObjectId }], default: [] },
     status: { type: String, enum: ['sent', 'edited', 'deleted'], default: 'sent' },
 
     // Client-generated — makes send idempotent against network retries.

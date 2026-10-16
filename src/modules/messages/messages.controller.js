@@ -88,6 +88,15 @@ export async function deleteMessage(req, res, next) {
   }
 }
 
+export async function deleteMessagesForMe(req, res, next) {
+  try {
+    await messagesService.deleteMessagesForMe(req.user.id, req.params.chatId, req.body.messageIds);
+    res.json({ success: true, data: { messageIds: req.body.messageIds } });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function toggleReaction(req, res, next) {
   try {
     const reactions = await reactionsService.toggleReaction(req.user.id, req.params.messageId, req.body.emoji);

@@ -39,6 +39,10 @@ export const sendMessageSchema = z.preprocess(
   z.discriminatedUnion('type', [textMessageSchema, gifMessageSchema])
 );
 
+export const deleteForMeSchema = z.object({
+  messageIds: z.array(objectId).min(1).max(100),
+});
+
 export const editMessageSchema = z.object({
   content: z.object({ text: z.string().min(1).max(5000) }),
 });
