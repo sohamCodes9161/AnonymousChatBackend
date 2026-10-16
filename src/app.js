@@ -34,7 +34,7 @@ app.use(helmet());
 //    so the refresh-token cookie can actually be sent cross-origin
 app.use(
   cors({
-    origin: [config.frontendUrl, 'http://localhost:5173'],
+    origin: config.frontendUrl,
     credentials: true,
   })
 );

@@ -15,9 +15,9 @@ const messageSchema = new mongoose.Schema(
     // active on this chat at send-time. Null = ordinary message.
     incognitoSessionId: { type: mongoose.Schema.Types.ObjectId, default: null },
 
-    type: { type: String, enum: ['text', 'system', 'image'], default: 'text' },
-    // Shape varies by type — { text } for text, { imageUrl, caption }
-    // for image. Extensible later (file/voice attachments etc.)
+    type: { type: String, enum: ['text', 'system', 'image', 'gif'], default: 'text' },
+    // Shape varies by type — { text } for text, { imageUrl, imagePublicId,
+    // caption } for image. Extensible later (file/voice attachments etc.)
     // without a schema migration — this is exactly the flexibility the
     // Mixed type was chosen for.
     content: { type: mongoose.Schema.Types.Mixed, required: true },
@@ -62,6 +62,23 @@ messageSchema.methods.toPublicJSON = function toPublicJSON() {
     // soft-delete promise (the row stays for reply-thread integrity,
     // but nothing sensitive lingers in it).
     return { ...base, type: 'text', content: { text: null }, deletedAt: this.deletedAt };
+  }
+
+  // imagePublicId is server-internal bookkeeping (needed to delete the
+  // Cloudinary asset) — clients only ever need the URL and caption.
+  if (this.type === 'image') {
+    return {
+      ...base,
+      type: 'image',
+      content: { imageUrl: this.content?.imageUrl, caption: this.content?.caption ?? null },
+    };
+  }
+
+  // GIFs are just links to GIPHY's CDN — nothing to hide, but the fields
+  // are listed explicitly so stored extras never leak to clients.
+  if (this.type === 'gif') {
+    const { gifUrl, previewUrl, width, height, title } = this.content || {};
+    return { ...base, type: 'gif', content: { gifUrl, previewUrl, width, height, title: title ?? null } };
   }
 
   return { ...base, type: this.type, content: this.content };

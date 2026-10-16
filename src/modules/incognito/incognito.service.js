@@ -7,6 +7,7 @@ import * as chatsService from '../chats/chats.service.js';
 import { isOnline } from '../../sockets/presence.js';
 import { getIO } from '../../sockets/ioInstance.js';
 import { AppError, ErrorCodes } from '../../utils/AppError.js';
+import { deleteAssets, publicIdFromUrl } from '../../utils/cloudinary.js';
 
 const GRACE_PERIOD_MS = 2 * 60 * 1000; // 2 minutes
 
@@ -71,6 +72,17 @@ export async function finalizeSessionEnd(sessionId) {
   if (!session || session.status === 'ended') return;
 
   const chatId = session.chatId.toString();
+
+  // Collect photo public_ids BEFORE the rows are hard-deleted — once
+  // they're gone there's no record of which Cloudinary assets to remove.
+  const imageMessages = await Message.find({
+    incognitoSessionId: session._id,
+    type: 'image',
+  }).select('content');
+  const imagePublicIds = imageMessages
+    .map((m) => m.content?.imagePublicId || publicIdFromUrl(m.content?.imageUrl))
+    .filter(Boolean);
+
   const dbSession = await mongoose.startSession();
   try {
     await dbSession.withTransaction(async () => {
@@ -90,6 +102,10 @@ export async function finalizeSessionEnd(sessionId) {
   } finally {
     dbSession.endSession();
   }
+
+  // Only after the transaction committed — never delete the files if the
+  // rows might still be there. Non-fatal by design (logs on failure).
+  await deleteAssets(imagePublicIds);
 
   getIO().to(chatId).emit('incognito:ended', { chatId, sessionId: session._id, endedAt: session.endedAt });
 }
