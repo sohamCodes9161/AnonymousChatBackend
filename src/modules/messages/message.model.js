@@ -59,6 +59,9 @@ messageSchema.methods.toPublicJSON = function toPublicJSON() {
     createdAt: this.createdAt,
     editedAt: this.editedAt,
     incognitoSessionId: this.incognitoSessionId,
+    // The sender's own client-generated id — lets their client match the
+    // socket echo to the optimistic message it already shows.
+    clientMessageId: this.clientMessageId ?? null,
   };
 
   if (this.status === 'deleted') {

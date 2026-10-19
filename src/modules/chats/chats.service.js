@@ -279,6 +279,32 @@ export async function listMembers(userId, chatId) {
     .sort({ joinedAt: 1 });
 }
 
+/**
+ * Tells the OTHER members, live, that userId has read up to a message so
+ * their ticks turn blue. Honours the same symmetric privacy rule as the
+ * chat list (receipts shown only if BOTH sides have them enabled): a
+ * room-wide broadcast would leak reads from people who turned receipts
+ * off, so this emits per recipient instead.
+ */
+async function broadcastRead(userId, chatId, lastReadMessageId) {
+  const readerSettings = await UserSettings.findOne({ userId });
+  if (readerSettings?.privacy?.readReceiptsEnabled === false) return;
+
+  const others = await ChatMember.find({ chatId, leftAt: null, userId: { $ne: userId } }).select('userId');
+  const otherIds = others.map((m) => m.userId.toString());
+  if (!otherIds.length) return;
+
+  const settings = await UserSettings.find({ userId: { $in: otherIds } });
+  const optedOut = new Set(
+    settings.filter((s) => s.privacy?.readReceiptsEnabled === false).map((s) => s.userId.toString())
+  );
+
+  const io = getIO();
+  otherIds
+    .filter((id) => !optedOut.has(id))
+    .forEach((id) => io.to(`user:${id}`).emit('message:read', { chatId, userId, lastReadMessageId }));
+}
+
 export async function markRead(userId, chatId, lastReadMessageId) {
   const member = await assertMembership(chatId, userId);
 
@@ -289,12 +315,15 @@ export async function markRead(userId, chatId, lastReadMessageId) {
     throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Message does not belong to this chat', 400);
   }
 
+  // Read position only moves forward — a late or repeated request for an
+  // older message must not regress it (or re-notify anyone).
+  const current = member.lastReadMessageId?.toString();
+  if (current && current >= lastReadMessageId.toString()) return member;
+
   member.lastReadMessageId = lastReadMessageId;
   await member.save();
 
-  // Broadcast so the sender's message ticks update live, without them
-  // needing to poll or refetch the chat list.
-  getIO().to(chatId).emit('message:read', { chatId, userId, lastReadMessageId });
+  await broadcastRead(userId, chatId, lastReadMessageId);
 
   return member;
 }
