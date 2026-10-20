@@ -243,6 +243,12 @@ export async function blockUser(currentUserId, targetUserId) {
     getIO().in(`user:${currentUserId}`).socketsLeave(chatId);
     getIO().in(`user:${targetUserId}`).socketsLeave(chatId);
   }
+
+  // Each side stops seeing the other's online / last-seen state straight
+  // away (the friendship is gone, so no presence events will arrive to
+  // clear it) — tell both clients to drop it.
+  getIO().to(`user:${currentUserId}`).emit('presence:hidden', { userId: targetUserId });
+  getIO().to(`user:${targetUserId}`).emit('presence:hidden', { userId: currentUserId });
 }
 
 export async function unblockUser(currentUserId, targetUserId) {

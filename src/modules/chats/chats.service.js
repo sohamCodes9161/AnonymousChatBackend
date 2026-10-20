@@ -4,6 +4,7 @@ import { ChatMember } from './chatMember.model.js';
 import { Message } from '../messages/message.model.js';
 import { User } from '../users/user.model.js';
 import { UserSettings } from '../settings/userSettings.model.js';
+import { Block } from '../friends/block.model.js';
 import { createSystemMessage } from '../messages/systemMessage.js';
 import { domainEventBus } from '../../events/domainEventBus.js';
 import { getIO } from '../../sockets/ioInstance.js';
@@ -168,7 +169,7 @@ export async function listMyChats(userId) {
   const otherMembers = await ChatMember.find({
     chatId: { $in: directChatIds },
     userId: { $ne: userId },
-  }).populate('userId', 'username displayName avatarUrl lastSeenAt');
+  }).populate('userId', 'username displayName avatarUrl lastSeenAt deletedAt');
   const otherUserByChat = new Map(
     otherMembers.map((m) => [
       m.chatId.toString(),
@@ -183,6 +184,18 @@ export async function listMyChats(userId) {
   const settingsRows = await UserSettings.find({ userId: { $in: [userId, ...otherUserIds] } });
   const settingsByUserId = new Map(settingsRows.map((s) => [s.userId.toString(), s]));
   const myReadReceiptsEnabled = settingsByUserId.get(userId)?.privacy?.readReceiptsEnabled ?? true;
+
+  // Blocked pairs (either direction) must not see each other's last seen
+  // or read position, whatever the privacy settings say.
+  const blockRows = await Block.find({
+    $or: [
+      { blockerId: userId, blockedId: { $in: otherUserIds } },
+      { blockedId: userId, blockerId: { $in: otherUserIds } },
+    ],
+  });
+  const blockedWith = new Set(
+    blockRows.map((b) => (b.blockerId.toString() === userId ? b.blockedId : b.blockerId).toString())
+  );
 
   // 'friends' visibility tier needs a relationship lookup — resolved
   // here, as a pre-pass, so the final map below stays synchronous and
@@ -228,8 +241,10 @@ export async function listMyChats(userId) {
       const theirReadReceiptsEnabled = otherSettings?.privacy?.readReceiptsEnabled ?? true;
       const lastSeenVisibility = otherSettings?.privacy?.lastSeenVisibility ?? 'everyone';
 
-      const lastSeenAt =
-        lastSeenVisibility === 'everyone'
+      const isBlockedPair = blockedWith.has(otherUser._id.toString());
+      const lastSeenAt = isBlockedPair || otherUser.deletedAt
+        ? null
+        : lastSeenVisibility === 'everyone'
           ? otherUser.lastSeenAt
           : lastSeenVisibility === 'friends'
             ? friendsTierResolved.get(chatIdStr) ?? null
@@ -243,8 +258,13 @@ export async function listMyChats(userId) {
         // Symmetric — visible only if BOTH sides have receipts enabled,
         // same rule WhatsApp uses to prevent one-sided snooping.
         lastReadMessageId:
-          myReadReceiptsEnabled && theirReadReceiptsEnabled ? otherUser.lastReadMessageId : null,
+          myReadReceiptsEnabled && theirReadReceiptsEnabled && !isBlockedPair
+            ? otherUser.lastReadMessageId
+            : null,
         lastSeenAt,
+        // Deleted accounts stay as anonymised participants; the client
+        // uses this to disable sending.
+        deleted: Boolean(otherUser.deletedAt),
       };
     }
 
@@ -297,6 +317,16 @@ async function broadcastRead(userId, chatId, lastReadMessageId) {
   const settings = await UserSettings.find({ userId: { $in: otherIds } });
   const optedOut = new Set(
     settings.filter((s) => s.privacy?.readReceiptsEnabled === false).map((s) => s.userId.toString())
+  );
+  // Never tell someone they've been read by a person they're blocked with.
+  const blocks = await Block.find({
+    $or: [
+      { blockerId: userId, blockedId: { $in: otherIds } },
+      { blockedId: userId, blockerId: { $in: otherIds } },
+    ],
+  });
+  blocks.forEach((b) =>
+    optedOut.add((b.blockerId.toString() === userId ? b.blockedId : b.blockerId).toString())
   );
 
   const io = getIO();

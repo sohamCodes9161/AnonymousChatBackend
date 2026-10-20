@@ -43,3 +43,12 @@ export async function search(req, res, next) {
     next(err);
   }
 }
+
+export async function deleteAccount(req, res, next) {
+  try {
+    const result = await usersService.deleteAccount(req.user.id, req.body.password);
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}

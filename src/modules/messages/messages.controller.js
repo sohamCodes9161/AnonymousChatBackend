@@ -97,6 +97,20 @@ export async function deleteMessagesForMe(req, res, next) {
   }
 }
 
+export async function forwardMessages(req, res, next) {
+  try {
+    const result = await messagesService.forwardMessages(
+      req.user.id,
+      req.params.chatId,
+      req.body.messageIds,
+      req.body.targetChatIds
+    );
+    res.json({ success: true, data: result });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function toggleReaction(req, res, next) {
   try {
     const reactions = await reactionsService.toggleReaction(req.user.id, req.params.messageId, req.body.emoji);

@@ -2,11 +2,13 @@ import { fileTypeFromBuffer } from 'file-type';
 import { Message } from './message.model.js';
 import { Chat } from '../chats/chat.model.js';
 import { ChatMember } from '../chats/chatMember.model.js';
+import { User } from '../users/user.model.js';
 import * as chatsService from '../chats/chats.service.js';
 import * as friendsService from '../friends/friends.service.js';
 import {
   uploadImageBuffer,
   deleteAsset,
+  copyImageFromUrl,
   publicIdFromUrl,
   CHAT_IMAGE_UPLOAD_OPTIONS,
 } from '../../utils/cloudinary.js';
@@ -31,6 +33,11 @@ async function assertNotBlocked(userId, chatId, chat) {
   const otherMember = await ChatMember.findOne({ chatId, userId: { $ne: userId }, leftAt: null });
   if (!otherMember) return;
 
+  const otherUser = await User.findById(otherMember.userId).select('deletedAt');
+  if (otherUser?.deletedAt) {
+    throw new AppError(ErrorCodes.CHAT_NOT_FRIENDS, 'This account no longer exists', 403);
+  }
+
   const relationship = await friendsService.getRelationshipStatus(userId, otherMember.userId.toString());
   if (relationship.status === 'blocked_by_me' || relationship.status === 'blocked_by_them') {
     throw new AppError(ErrorCodes.CHAT_NOT_FRIENDS, 'Cannot send messages in this conversation', 403);
@@ -44,7 +51,11 @@ function updateChatPreview(chat, userId, message, previewText) {
   chat.lastMessagePreview = previewText;
 }
 
-export async function sendMessage(userId, chatId, { type = 'text', content, clientMessageId, replyToMessageId }) {
+export async function sendMessage(
+  userId,
+  chatId,
+  { type = 'text', content, clientMessageId, replyToMessageId, forwarded = false }
+) {
   await chatsService.assertMembership(chatId, userId);
 
   if (clientMessageId) {
@@ -82,6 +93,7 @@ export async function sendMessage(userId, chatId, { type = 'text', content, clie
     replyToMessageId: replyToMessageId || null,
     clientMessageId: clientMessageId || null,
     incognitoSessionId: chat.activeIncognitoSessionId || null,
+    forwarded,
   });
 
   updateChatPreview(chat, userId, message, type === 'text' ? String(content?.text || '').slice(0, 100) : '🎞️ GIF');
@@ -119,6 +131,10 @@ export async function sendImageMessage(userId, chatId, fileBuffer, caption) {
     CHAT_IMAGE_UPLOAD_OPTIONS
   );
 
+  return persistImageMessage({ userId, chatId, chat, result, caption });
+}
+
+async function persistImageMessage({ userId, chatId, chat, result, caption, forwarded = false }) {
   const message = await Message.create({
     chatId,
     senderId: userId,
@@ -129,6 +145,7 @@ export async function sendImageMessage(userId, chatId, fileBuffer, caption) {
       caption: caption || null,
     },
     incognitoSessionId: chat.activeIncognitoSessionId || null,
+    forwarded,
   });
 
   updateChatPreview(chat, userId, message, '📷 Photo');
@@ -137,6 +154,77 @@ export async function sendImageMessage(userId, chatId, fileBuffer, caption) {
   getIO().to(chatId.toString()).emit('message:new', { ...message.toPublicJSON(), reactions: [] });
 
   return message;
+}
+
+/**
+ * Forwards messages from one chat into up to 5 others. Rules:
+ *  - only text, GIF and photo messages (not deleted, not hidden for you);
+ *  - Incognito messages can NEVER be forwarded — that would defeat the
+ *    point of a volatile session;
+ *  - photos are COPIED to a new Cloudinary asset, so deleting the original
+ *    (or ending its Incognito session) doesn't break the forwarded copy;
+ *  - each target goes through the normal send rules (membership, blocks,
+ *    deleted accounts), so one bad target doesn't stop the others.
+ * Returns which targets succeeded and which failed (and why).
+ */
+export async function forwardMessages(userId, sourceChatId, messageIds, targetChatIds) {
+  await chatsService.assertMembership(sourceChatId, userId);
+
+  const messages = await Message.find({
+    _id: { $in: messageIds },
+    chatId: sourceChatId,
+    status: { $ne: 'deleted' },
+    deletedFor: { $ne: userId },
+    type: { $in: ['text', 'gif', 'image'] },
+  }).sort({ _id: 1 });
+
+  if (!messages.length) {
+    throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Nothing to forward', 400);
+  }
+  if (messages.some((m) => m.incognitoSessionId)) {
+    throw new AppError(ErrorCodes.VALIDATION_ERROR, "Incognito messages can't be forwarded", 400);
+  }
+
+  const targets = [...new Set(targetChatIds.map(String))];
+  const forwardedTo = [];
+  const failures = [];
+
+  for (const targetChatId of targets) {
+    try {
+      await chatsService.assertMembership(targetChatId, userId);
+      const chat = await Chat.findById(targetChatId);
+      if (!chat) throw new AppError(ErrorCodes.NOT_FOUND, 'Chat not found', 404);
+      await assertNotBlocked(userId, targetChatId, chat);
+
+      for (const m of messages) {
+        if (m.type === 'image') {
+          const result = await copyImageFromUrl(`message-attachments/${targetChatId}`, m.content?.imageUrl);
+          await persistImageMessage({
+            userId,
+            chatId: targetChatId,
+            chat: await Chat.findById(targetChatId), // fresh doc — previous save bumped it
+            result,
+            caption: m.content?.caption,
+            forwarded: true,
+          });
+        } else {
+          await sendMessage(userId, targetChatId, {
+            type: m.type,
+            content: m.type === 'text' ? { text: m.content?.text } : m.content,
+            forwarded: true,
+          });
+        }
+      }
+      forwardedTo.push(targetChatId);
+    } catch (err) {
+      failures.push({
+        chatId: targetChatId,
+        message: err instanceof AppError ? err.message : 'Could not forward to this chat',
+      });
+    }
+  }
+
+  return { forwardedTo, failures };
 }
 
 export async function listMessages(userId, chatId, { before, limit = 50 } = {}) {

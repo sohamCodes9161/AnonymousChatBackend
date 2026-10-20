@@ -43,6 +43,11 @@ export const deleteForMeSchema = z.object({
   messageIds: z.array(objectId).min(1).max(100),
 });
 
+export const forwardSchema = z.object({
+  messageIds: z.array(objectId).min(1).max(20),
+  targetChatIds: z.array(objectId).min(1).max(5),
+});
+
 export const editMessageSchema = z.object({
   content: z.object({ text: z.string().min(1).max(5000) }),
 });

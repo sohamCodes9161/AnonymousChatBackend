@@ -13,7 +13,7 @@ import {
   markReadSchema,
   muteSchema,
 } from './chats.validation.js';
-import { sendMessageSchema, deleteForMeSchema } from '../messages/messages.validation.js';
+import { sendMessageSchema, deleteForMeSchema, forwardSchema } from '../messages/messages.validation.js';
 import { updateGroupInfoSchema } from '../groups/groups.validation.js';
 
 const router = Router();
@@ -49,6 +49,7 @@ router.post('/:chatId/incognito/end', incognitoController.end);
 // a message directly, those live in messages.routes.js instead.
 router.post('/:chatId/messages', validate(sendMessageSchema), messagesController.sendMessage);
 router.post('/:chatId/messages/image', messageImageUpload, messagesController.sendImageMessage);
+router.post('/:chatId/messages/forward', validate(forwardSchema), messagesController.forwardMessages);
 router.post('/:chatId/messages/delete-for-me', validate(deleteForMeSchema), messagesController.deleteMessagesForMe);
 router.get('/:chatId/messages', messagesController.listMessages);
 router.get('/:chatId/messages/search', messagesController.searchMessages);

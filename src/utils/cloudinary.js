@@ -35,6 +35,24 @@ export const CHAT_IMAGE_UPLOAD_OPTIONS = {
 };
 
 /**
+ * Server-side copy of an existing Cloudinary image into a new asset (used
+ * by Forward, so a forwarded photo survives the original being deleted).
+ * Only our own Cloudinary delivery URLs are accepted — the URL comes from
+ * the database, never from a client, but this keeps it from ever being
+ * pointed at an arbitrary host.
+ */
+export async function copyImageFromUrl(folder, url) {
+  let host;
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    throw new Error('Invalid image URL');
+  }
+  if (host !== 'res.cloudinary.com') throw new Error('Not a Cloudinary URL');
+  return cloudinary.uploader.upload(url, { folder, ...CHAT_IMAGE_UPLOAD_OPTIONS });
+}
+
+/**
  * Deletes a previous avatar when it's replaced. Non-fatal by design —
  * an orphaned Cloudinary asset costs storage, not correctness, so a
  * delete failure is logged and swallowed rather than blocking the

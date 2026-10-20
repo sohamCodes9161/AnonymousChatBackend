@@ -1,5 +1,12 @@
 import { domainEventBus } from '../../events/domainEventBus.js';
 import { Notification } from './notification.model.js';
+import { UserSettings } from '../settings/userSettings.model.js';
+
+// Missing settings row or missing key => default ON.
+async function wants(userId, key) {
+  const settings = await UserSettings.findOne({ userId }).select('notificationPreferences').lean();
+  return settings?.notificationPreferences?.[key] !== false;
+}
 
 /**
  * Persists a subset of domain events as Notification rows. Only
@@ -9,6 +16,7 @@ import { Notification } from './notification.model.js';
  */
 export function registerNotificationListener() {
   domainEventBus.on('friend.request.received', async ({ toUserId, fromUserId, requestId }) => {
+    if (!(await wants(toUserId, 'friendRequests'))) return;
     await Notification.create({
       userId: toUserId,
       type: 'friend_request_received',
@@ -17,6 +25,7 @@ export function registerNotificationListener() {
   });
 
   domainEventBus.on('friend.request.accepted', async ({ toUserId, byUserId, friendshipId }) => {
+    if (!(await wants(toUserId, 'friendAccepted'))) return;
     await Notification.create({
       userId: toUserId,
       type: 'friend_request_accepted',
@@ -25,6 +34,7 @@ export function registerNotificationListener() {
   });
 
   domainEventBus.on('group.member.added', async ({ chatId, userId, addedBy }) => {
+    if (!(await wants(userId, 'groupEvents'))) return;
     await Notification.create({
       userId,
       type: 'group_member_added',
@@ -33,6 +43,7 @@ export function registerNotificationListener() {
   });
 
   domainEventBus.on('group.role.changed', async ({ chatId, userId, role, changedBy }) => {
+    if (!(await wants(userId, 'groupEvents'))) return;
     await Notification.create({
       userId,
       type: 'group_role_changed',

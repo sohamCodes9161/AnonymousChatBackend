@@ -24,6 +24,9 @@ const messageSchema = new mongoose.Schema(
 
     replyToMessageId: { type: mongoose.Schema.Types.ObjectId, ref: 'Message', default: null },
 
+    // True for messages created by "Forward" (shown with a label).
+    forwarded: { type: Boolean, default: false },
+
     // "Delete for me": users who have hidden this message from their own
     // view. The row stays for everyone else; never exposed to clients.
     deletedFor: { type: [{ type: mongoose.Schema.Types.ObjectId }], default: [] },
@@ -62,6 +65,7 @@ messageSchema.methods.toPublicJSON = function toPublicJSON() {
     // The sender's own client-generated id — lets their client match the
     // socket echo to the optimistic message it already shows.
     clientMessageId: this.clientMessageId ?? null,
+    forwarded: this.forwarded === true,
   };
 
   if (this.status === 'deleted') {

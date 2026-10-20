@@ -27,6 +27,10 @@ const userSchema = new mongoose.Schema(
     // on every user object everywhere.
     lastSeenAt: { type: Date, default: null },
 
+    // Set when the account is deleted. The row stays (anonymised) so other
+    // people's chat history keeps a valid participant to point at.
+    deletedAt: { type: Date, default: null },
+
     // Login rate-limiting / brute-force protection (Security module)
     failedLoginAttempts: { type: Number, default: 0 },
     lockedUntil: { type: Date, default: null },
