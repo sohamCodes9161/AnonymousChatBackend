@@ -21,6 +21,10 @@ export function registerRealtimeNotificationBridge() {
     getIO().to(`user:${userId}`).emit('group:member_added', { chatId, addedBy });
   });
 
+  domainEventBus.on('message.mentioned', ({ chatId, messageId, userId }) => {
+    getIO().to(`user:${userId}`).emit('group:mentioned', { chatId, messageId });
+  });
+
   domainEventBus.on('group.role.changed', ({ chatId, userId, role, changedBy }) => {
     getIO().to(`user:${userId}`).emit('group:role_changed', { chatId, role, changedBy });
   });

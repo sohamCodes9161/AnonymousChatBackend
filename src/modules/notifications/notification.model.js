@@ -10,6 +10,7 @@ const notificationSchema = new mongoose.Schema(
         'friend_request_accepted',
         'group_member_added',
         'group_role_changed',
+        'group_mention',
       ],
       required: true,
     },

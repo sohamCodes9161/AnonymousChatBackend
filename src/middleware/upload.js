@@ -34,3 +34,10 @@ export const messageImageUpload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
   fileFilter,
 }).single('image');
+
+// Voice notes: ~5 min of low-bitrate Opus/AAC is ~1-3MB, so 6MB is generous.
+export const MAX_VOICE_BYTES = 6 * 1024 * 1024;
+export const voiceUpload = multer({
+  storage,
+  limits: { fileSize: MAX_VOICE_BYTES },
+}).single('audio'); // type is verified from the bytes in the service, not the header

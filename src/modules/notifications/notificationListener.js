@@ -42,6 +42,15 @@ export function registerNotificationListener() {
     });
   });
 
+  domainEventBus.on('message.mentioned', async ({ chatId, messageId, userId, byUserId }) => {
+    if (!(await wants(userId, 'groupEvents'))) return;
+    await Notification.create({
+      userId,
+      type: 'group_mention',
+      payload: { chatId, messageId, byUserId },
+    });
+  });
+
   domainEventBus.on('group.role.changed', async ({ chatId, userId, role, changedBy }) => {
     if (!(await wants(userId, 'groupEvents'))) return;
     await Notification.create({

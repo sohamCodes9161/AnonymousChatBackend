@@ -33,6 +33,27 @@ export async function sendImageMessage(req, res, next) {
   }
 }
 
+export async function sendVoiceMessage(req, res, next) {
+  try {
+    if (!req.file) {
+      throw new AppError(
+        ErrorCodes.VALIDATION_ERROR,
+        'No file uploaded — send it as form-data with field name "audio"',
+        400
+      );
+    }
+    const message = await messagesService.sendVoiceMessage(
+      req.user.id,
+      req.params.chatId,
+      req.file.buffer,
+      req.body.duration
+    );
+    res.status(201).json({ success: true, data: { message: { ...message.toPublicJSON(), reactions: [] } } });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function listMessages(req, res, next) {
   try {
     const { before, limit } = req.query;
@@ -70,9 +91,23 @@ export async function searchMessages(req, res, next) {
   }
 }
 
+export async function searchAllMessages(req, res, next) {
+  try {
+    const rows = await messagesService.searchAllMessages(req.user.id, req.query.q);
+    res.json({ success: true, data: { messages: rows.map((m) => m.toPublicJSON()) } });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function editMessage(req, res, next) {
   try {
-    const message = await messagesService.editMessage(req.user.id, req.params.messageId, req.body.content);
+    const message = await messagesService.editMessage(
+      req.user.id,
+      req.params.messageId,
+      req.body.content,
+      req.body.mentions
+    );
     res.json({ success: true, data: { message: message.toPublicJSON() } });
   } catch (err) {
     next(err);

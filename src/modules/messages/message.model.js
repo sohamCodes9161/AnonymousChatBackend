@@ -15,7 +15,7 @@ const messageSchema = new mongoose.Schema(
     // active on this chat at send-time. Null = ordinary message.
     incognitoSessionId: { type: mongoose.Schema.Types.ObjectId, default: null },
 
-    type: { type: String, enum: ['text', 'system', 'image', 'gif'], default: 'text' },
+    type: { type: String, enum: ['text', 'system', 'image', 'gif', 'voice'], default: 'text' },
     // Shape varies by type — { text } for text, { imageUrl, imagePublicId,
     // caption } for image. Extensible later (file/voice attachments etc.)
     // without a schema migration — this is exactly the flexibility the
@@ -26,6 +26,9 @@ const messageSchema = new mongoose.Schema(
 
     // True for messages created by "Forward" (shown with a label).
     forwarded: { type: Boolean, default: false },
+    // Group @mentions: ids of members whose @username appears in the text.
+    // Server-validated (see resolveMentions) — never trusted from the client.
+    mentions: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }], default: [] },
 
     // "Delete for me": users who have hidden this message from their own
     // view. The row stays for everyone else; never exposed to clients.
@@ -66,6 +69,7 @@ messageSchema.methods.toPublicJSON = function toPublicJSON() {
     // socket echo to the optimistic message it already shows.
     clientMessageId: this.clientMessageId ?? null,
     forwarded: this.forwarded === true,
+    mentions: (this.mentions || []).map((id) => id.toString()),
   };
 
   if (this.status === 'deleted') {
@@ -83,6 +87,12 @@ messageSchema.methods.toPublicJSON = function toPublicJSON() {
       type: 'image',
       content: { imageUrl: this.content?.imageUrl, caption: this.content?.caption ?? null },
     };
+  }
+
+  // Voice notes: audioPublicId stays server-side, like imagePublicId.
+  if (this.type === 'voice') {
+    const { audioUrl, duration, mimeType } = this.content || {};
+    return { ...base, type: 'voice', content: { audioUrl, duration: duration ?? 0, mimeType: mimeType ?? null } };
   }
 
   // GIFs are just links to GIPHY's CDN — nothing to hide, but the fields

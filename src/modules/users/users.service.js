@@ -1,7 +1,8 @@
 import { fileTypeFromBuffer } from 'file-type';
 import { User } from './user.model.js';
 import crypto from 'crypto';
-import { uploadImageBuffer, deleteAsset, deleteAssets, publicIdFromUrl } from '../../utils/cloudinary.js';
+import { uploadImageBuffer, deleteAsset } from '../../utils/cloudinary.js';
+import { mediaRefsOf, purgeMedia, MEDIA_MESSAGE_TYPES } from '../../utils/messageMedia.js';
 import { verifyPassword, hashPassword } from '../../utils/password.js';
 import { Message } from '../messages/message.model.js';
 import { MessageReaction } from '../messages/messageReaction.model.js';
@@ -151,19 +152,12 @@ export async function deleteAccount(userId, password) {
 
   // 2. Purge sent messages (+ their images) and reactions.
   const sent = await Message.find({ senderId: userId }).select('_id chatId type content');
-  const publicIds = [];
-  const chatIds = new Set();
-  for (const m of sent) {
-    chatIds.add(m.chatId.toString());
-    if (m.type === 'image') {
-      const id = m.content?.imagePublicId || publicIdFromUrl(m.content?.imageUrl);
-      if (id) publicIds.push(id);
-    }
-  }
+  const chatIds = new Set(sent.map((m) => m.chatId.toString()));
+  const mediaRefs = mediaRefsOf(sent.filter((m) => MEDIA_MESSAGE_TYPES.includes(m.type)));
   const sentIds = sent.map((m) => m._id);
   await MessageReaction.deleteMany({ $or: [{ userId }, { messageId: { $in: sentIds } }] });
   await Message.deleteMany({ senderId: userId });
-  if (publicIds.length) await deleteAssets(publicIds);
+  await purgeMedia(mediaRefs);
 
   // Chat previews that pointed at one of the purged messages.
   await Chat.updateMany(

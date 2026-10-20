@@ -5,7 +5,7 @@ import * as groupsController from '../groups/groups.controller.js';
 import * as incognitoController from '../incognito/incognito.controller.js';
 import { authenticate } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
-import { avatarUpload, messageImageUpload } from '../../middleware/upload.js';
+import { avatarUpload, messageImageUpload, voiceUpload } from '../../middleware/upload.js';
 import {
   createDirectChatSchema,
   createGroupChatSchema,
@@ -23,6 +23,7 @@ router.use(authenticate);
 router.post('/direct', validate(createDirectChatSchema), chatsController.createDirectChat);
 router.post('/group', validate(createGroupChatSchema), chatsController.createGroupChat);
 router.get('/', chatsController.listMyChats);
+router.get('/search/messages', messagesController.searchAllMessages); // before /:chatId routes
 router.get('/:chatId', chatsController.getChat);
 router.patch('/:chatId', validate(updateGroupInfoSchema), groupsController.updateGroupInfo);
 router.post('/:chatId/avatar', avatarUpload, groupsController.uploadGroupAvatar);
@@ -49,6 +50,7 @@ router.post('/:chatId/incognito/end', incognitoController.end);
 // a message directly, those live in messages.routes.js instead.
 router.post('/:chatId/messages', validate(sendMessageSchema), messagesController.sendMessage);
 router.post('/:chatId/messages/image', messageImageUpload, messagesController.sendImageMessage);
+router.post('/:chatId/messages/voice', voiceUpload, messagesController.sendVoiceMessage);
 router.post('/:chatId/messages/forward', validate(forwardSchema), messagesController.forwardMessages);
 router.post('/:chatId/messages/delete-for-me', validate(deleteForMeSchema), messagesController.deleteMessagesForMe);
 router.get('/:chatId/messages', messagesController.listMessages);

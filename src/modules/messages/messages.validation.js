@@ -15,6 +15,7 @@ const messageBase = {
 const textMessageSchema = z.object({
   type: z.literal('text'),
   content: z.object({ text: z.string().min(1).max(5000) }),
+  mentions: z.array(objectId).max(20).optional(),
   ...messageBase,
 });
 
@@ -50,6 +51,7 @@ export const forwardSchema = z.object({
 
 export const editMessageSchema = z.object({
   content: z.object({ text: z.string().min(1).max(5000) }),
+  mentions: z.array(objectId).max(20).optional(),
 });
 
 export const reactionSchema = z.object({

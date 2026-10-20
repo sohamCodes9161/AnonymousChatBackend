@@ -9,6 +9,7 @@ import { handleConnection } from './sockets/connectionHandler.js';
 import { registerRealtimeNotificationBridge } from './sockets/notificationBridge.js';
 import { registerNotificationListener } from './modules/notifications/notificationListener.js';
 import { startIncognitoSweep } from './modules/incognito/sweepJob.js';
+import { startMediaSweep } from './jobs/mediaSweepJob.js';
 
 const httpServer = http.createServer(app);
 
@@ -34,6 +35,7 @@ registerNotificationListener();
 async function start() {
   await connectDB();
   startIncognitoSweep();
+  startMediaSweep();
 
   httpServer.listen(config.port, () => {
     console.log(`Server listening on port ${config.port} (${config.nodeEnv})`);

@@ -5,6 +5,9 @@ import * as chatsService from '../chats/chats.service.js';
 import { createSystemMessage } from '../messages/systemMessage.js';
 import { domainEventBus } from '../../events/domainEventBus.js';
 import { uploadImageBuffer, deleteAsset } from '../../utils/cloudinary.js';
+import { Message } from '../messages/message.model.js';
+import { MessageReaction } from '../messages/messageReaction.model.js';
+import { mediaRefsOf, purgeMedia, MEDIA_MESSAGE_TYPES } from '../../utils/messageMedia.js';
 import { AppError, ErrorCodes } from '../../utils/AppError.js';
 
 const ALLOWED_AVATAR_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
@@ -139,6 +142,15 @@ export async function deleteGroup(currentUserId, chatId) {
   // Soft-delete cascades to membership — every member loses access
   // immediately, not just eventually via some other check.
   await ChatMember.updateMany({ chatId, leftAt: null }, { leftAt: new Date() });
+
+  // Nobody can reach this group's history any more — free its Cloudinary
+  // files (photos, voice notes, the group avatar) and drop the messages.
+  const mediaMessages = await Message.find({ chatId, type: { $in: MEDIA_MESSAGE_TYPES } }).select('type content');
+  const allIds = await Message.find({ chatId }).distinct('_id');
+  await MessageReaction.deleteMany({ messageId: { $in: allIds } });
+  await Message.deleteMany({ chatId });
+  await purgeMedia(mediaRefsOf(mediaMessages));
+  if (chat.avatarPublicId) deleteAsset(chat.avatarPublicId);
 
   return chat;
 }

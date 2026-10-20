@@ -7,17 +7,35 @@ import * as chatsService from '../chats/chats.service.js';
 import * as friendsService from '../friends/friends.service.js';
 import {
   uploadImageBuffer,
-  deleteAsset,
+  uploadAudioBuffer,
   copyImageFromUrl,
-  publicIdFromUrl,
+  copyAssetFromUrl,
   CHAT_IMAGE_UPLOAD_OPTIONS,
 } from '../../utils/cloudinary.js';
+import { mediaRefOfMessage, mediaRefsOf, purgeMedia } from '../../utils/messageMedia.js';
 import { sanitizeGifContent } from '../../utils/giphy.js';
 import { getReactionSummaryForMessages } from './reactions.service.js';
 import { getIO } from '../../sockets/ioInstance.js';
+import { domainEventBus } from '../../events/domainEventBus.js';
 import { AppError, ErrorCodes } from '../../utils/AppError.js';
 
 const ALLOWED_IMAGE_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+
+// What file-type reports for the containers browsers' MediaRecorder produces
+// (WebM/Ogg Opus on Chrome/Firefox, MP4/AAC on Safari), plus plain MP3. Mapped
+// to the audio/* type a player should be told about.
+const AUDIO_CONTAINERS = new Map([
+  ['video/webm', 'audio/webm'],
+  ['audio/webm', 'audio/webm'],
+  ['audio/ogg', 'audio/ogg'],
+  ['video/ogg', 'audio/ogg'],
+  ['audio/opus', 'audio/ogg'],
+  ['audio/mp4', 'audio/mp4'],
+  ['video/mp4', 'audio/mp4'],
+  ['audio/x-m4a', 'audio/mp4'],
+  ['audio/mpeg', 'audio/mpeg'],
+]);
+export const MAX_VOICE_SECONDS = 300;
 
 /**
  * Blocking never touches ChatMember, so an existing direct chat's
@@ -51,10 +69,54 @@ function updateChatPreview(chat, userId, message, previewText) {
   chat.lastMessagePreview = previewText;
 }
 
+/**
+ * A mention only counts when (a) the target is an active member of this
+ * group, (b) it isn't the sender, and (c) "@username" really appears in
+ * the text. (c) stops a client from silently pinging someone, and means an
+ * edit that removes the @name also removes the mention.
+ */
+async function resolveMentions(chatId, senderId, text, candidateIds) {
+  const ids = [...new Set((candidateIds || []).map(String))].filter((id) => id !== String(senderId));
+  if (!ids.length || !text) return [];
+
+  const members = await ChatMember.find({ chatId, userId: { $in: ids }, leftAt: null }).select('userId');
+  const memberIds = members.map((m) => m.userId);
+  if (!memberIds.length) return [];
+
+  const users = await User.find({ _id: { $in: memberIds }, deletedAt: null }).select('username');
+  const lower = text.toLowerCase();
+  return users
+    .filter((u) => {
+      const tag = `@${u.username.toLowerCase()}`;
+      let from = 0;
+      for (;;) {
+        const i = lower.indexOf(tag, from);
+        if (i === -1) return false;
+        const next = lower[i + tag.length];
+        if (!next || !/[a-z0-9_]/.test(next)) return true; // whole-word match only
+        from = i + 1;
+      }
+    })
+    .map((u) => u._id);
+}
+
+function announceMentions(message, mentionIds, alreadyNotified = []) {
+  const skip = new Set(alreadyNotified.map(String));
+  for (const userId of mentionIds) {
+    if (skip.has(String(userId))) continue;
+    domainEventBus.emit('message.mentioned', {
+      chatId: message.chatId.toString(),
+      messageId: message._id.toString(),
+      userId: userId.toString(),
+      byUserId: message.senderId.toString(),
+    });
+  }
+}
+
 export async function sendMessage(
   userId,
   chatId,
-  { type = 'text', content, clientMessageId, replyToMessageId, forwarded = false }
+  { type = 'text', content, clientMessageId, replyToMessageId, forwarded = false, mentions = [] }
 ) {
   await chatsService.assertMembership(chatId, userId);
 
@@ -85,6 +147,11 @@ export async function sendMessage(
     throw new AppError(ErrorCodes.VALIDATION_ERROR, `Unsupported message type "${type}"`, 400);
   }
 
+  const mentionIds =
+    chat.type === 'group' && type === 'text' && !forwarded
+      ? await resolveMentions(chatId, userId, content?.text, mentions)
+      : [];
+
   const message = await Message.create({
     chatId,
     senderId: userId,
@@ -94,12 +161,14 @@ export async function sendMessage(
     clientMessageId: clientMessageId || null,
     incognitoSessionId: chat.activeIncognitoSessionId || null,
     forwarded,
+    mentions: mentionIds,
   });
 
   updateChatPreview(chat, userId, message, type === 'text' ? String(content?.text || '').slice(0, 100) : '🎞️ GIF');
   await chat.save();
 
   getIO().to(chatId.toString()).emit('message:new', { ...message.toPublicJSON(), reactions: [] });
+  announceMentions(message, mentionIds);
 
   return message;
 }
@@ -156,6 +225,48 @@ async function persistImageMessage({ userId, chatId, chat, result, caption, forw
   return message;
 }
 
+export async function sendVoiceMessage(userId, chatId, fileBuffer, durationSeconds) {
+  await chatsService.assertMembership(chatId, userId);
+
+  const duration = Math.round(Number(durationSeconds));
+  if (!Number.isFinite(duration) || duration < 1 || duration > MAX_VOICE_SECONDS + 5) {
+    throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Voice notes must be between 1 second and 5 minutes', 400);
+  }
+
+  const chat = await Chat.findById(chatId);
+  if (!chat) {
+    throw new AppError(ErrorCodes.NOT_FOUND, 'Chat not found', 404);
+  }
+  await assertNotBlocked(userId, chatId, chat);
+
+  const detected = await fileTypeFromBuffer(fileBuffer);
+  const mimeType = detected && AUDIO_CONTAINERS.get(detected.mime);
+  if (!mimeType) {
+    throw new AppError(ErrorCodes.VALIDATION_ERROR, 'File content is not a supported audio recording', 400);
+  }
+
+  const result = await uploadAudioBuffer(`voice-messages/${chatId}`, fileBuffer);
+  return persistVoiceMessage({ userId, chatId, chat, result, duration, mimeType });
+}
+
+async function persistVoiceMessage({ userId, chatId, chat, result, duration, mimeType, forwarded = false }) {
+  const message = await Message.create({
+    chatId,
+    senderId: userId,
+    type: 'voice',
+    content: { audioUrl: result.secure_url, audioPublicId: result.public_id, duration, mimeType },
+    incognitoSessionId: chat.activeIncognitoSessionId || null,
+    forwarded,
+  });
+
+  updateChatPreview(chat, userId, message, '🎤 Voice message');
+  await chat.save();
+
+  getIO().to(chatId.toString()).emit('message:new', { ...message.toPublicJSON(), reactions: [] });
+
+  return message;
+}
+
 /**
  * Forwards messages from one chat into up to 5 others. Rules:
  *  - only text, GIF and photo messages (not deleted, not hidden for you);
@@ -175,7 +286,7 @@ export async function forwardMessages(userId, sourceChatId, messageIds, targetCh
     chatId: sourceChatId,
     status: { $ne: 'deleted' },
     deletedFor: { $ne: userId },
-    type: { $in: ['text', 'gif', 'image'] },
+    type: { $in: ['text', 'gif', 'image', 'voice'] },
   }).sort({ _id: 1 });
 
   if (!messages.length) {
@@ -205,6 +316,17 @@ export async function forwardMessages(userId, sourceChatId, messageIds, targetCh
             chat: await Chat.findById(targetChatId), // fresh doc — previous save bumped it
             result,
             caption: m.content?.caption,
+            forwarded: true,
+          });
+        } else if (m.type === 'voice') {
+          const result = await copyAssetFromUrl(`voice-messages/${targetChatId}`, m.content?.audioUrl, 'video');
+          await persistVoiceMessage({
+            userId,
+            chatId: targetChatId,
+            chat: await Chat.findById(targetChatId),
+            result,
+            duration: m.content?.duration || 1,
+            mimeType: m.content?.mimeType || 'audio/webm',
             forwarded: true,
           });
         } else {
@@ -279,7 +401,43 @@ export async function searchMessages(userId, chatId, query) {
   return Message.find(filter).sort({ _id: -1 }).limit(50);
 }
 
-export async function editMessage(userId, messageId, content) {
+/**
+ * Global search across every chat the user is in. Respects each chat's
+ * "clear chat" boundary, hides deleted / delete-for-me messages, and skips
+ * Incognito messages (volatile by design — they shouldn't surface in a
+ * persistent index). Capped; newest first.
+ */
+export async function searchAllMessages(userId, query) {
+  const trimmed = (query || '').trim();
+  if (trimmed.length < 2) return [];
+
+  const memberships = await ChatMember.find({ userId, leftAt: null }).select('chatId clearedBefore');
+  if (!memberships.length) return [];
+
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const rx = { $regex: escaped, $options: 'i' };
+
+  const perChat = memberships.map((m) =>
+    m.clearedBefore
+      ? { chatId: m.chatId, createdAt: { $gte: m.clearedBefore } }
+      : { chatId: m.chatId }
+  );
+
+  return Message.find({
+    $and: [
+      { $or: perChat },
+      { $or: [{ 'content.text': rx }, { 'content.caption': rx }] },
+    ],
+    status: { $ne: 'deleted' },
+    deletedFor: { $ne: userId },
+    incognitoSessionId: null,
+    type: { $in: ['text', 'image'] },
+  })
+    .sort({ _id: -1 })
+    .limit(30);
+}
+
+export async function editMessage(userId, messageId, content, mentions = []) {
   const message = await Message.findById(messageId);
   if (!message || message.status === 'deleted') {
     throw new AppError(ErrorCodes.NOT_FOUND, 'Message not found', 404);
@@ -294,12 +452,20 @@ export async function editMessage(userId, messageId, content) {
     throw new AppError(ErrorCodes.VALIDATION_ERROR, 'Only text messages can be edited', 400);
   }
 
+  const previousMentions = (message.mentions || []).map(String);
+  const chat = await Chat.findById(message.chatId).select('type');
+  message.mentions =
+    chat?.type === 'group'
+      ? await resolveMentions(message.chatId, userId, content?.text, mentions)
+      : [];
+
   message.content = content;
   message.status = 'edited';
   message.editedAt = new Date();
   await message.save();
 
   getIO().to(message.chatId.toString()).emit('message:edited', message.toPublicJSON());
+  announceMentions(message, message.mentions, previousMentions); // only NEW mentions notify
 
   return message;
 }
@@ -319,7 +485,40 @@ export async function deleteMessagesForMe(userId, chatId, messageIds) {
   );
 
   getIO().to(`user:${userId}`).emit('message:hidden', { chatId, messageIds });
+
+  // Once EVERY current member has hidden a message, nobody can ever see it
+  // again — drop the row and free its Cloudinary file instead of keeping an
+  // unreachable asset on the (limited) free storage plan.
+  await purgeFullyHiddenMedia(chatId, messageIds);
+
   return result.modifiedCount;
+}
+
+async function purgeFullyHiddenMedia(chatId, messageIds) {
+  try {
+    const candidates = await Message.find({
+      _id: { $in: messageIds },
+      chatId,
+      type: { $in: ['image', 'voice'] },
+      status: { $ne: 'deleted' },
+    });
+    if (!candidates.length) return;
+
+    const members = await ChatMember.find({ chatId, leftAt: null }).select('userId');
+    const memberIds = members.map((m) => m.userId.toString());
+    if (!memberIds.length) return;
+
+    const gone = candidates.filter((m) => {
+      const hidden = new Set((m.deletedFor || []).map(String));
+      return memberIds.every((id) => hidden.has(id));
+    });
+    if (!gone.length) return;
+
+    await Message.deleteMany({ _id: { $in: gone.map((m) => m._id) } });
+    await purgeMedia(mediaRefsOf(gone));
+  } catch (err) {
+    console.error('purgeFullyHiddenMedia failed:', err.message);
+  }
 }
 
 export async function deleteMessage(userId, messageId) {
@@ -333,10 +532,7 @@ export async function deleteMessage(userId, messageId) {
 
   // Capture before the content is wiped below. Photos sent before
   // public_ids were stored fall back to deriving it from the URL.
-  const imagePublicId =
-    message.type === 'image'
-      ? message.content?.imagePublicId || publicIdFromUrl(message.content?.imageUrl)
-      : null;
+  const mediaRef = mediaRefOfMessage(message);
 
   message.status = 'deleted';
   message.deletedAt = new Date();
@@ -345,7 +541,7 @@ export async function deleteMessage(userId, messageId) {
 
   // After the save, so a Cloudinary hiccup can never block the delete
   // the user asked for (deleteAsset swallows + logs its own errors).
-  if (imagePublicId) deleteAsset(imagePublicId);
+  if (mediaRef) purgeMedia([mediaRef]);
 
   getIO().to(message.chatId.toString()).emit('message:deleted', {
     id: message._id,
