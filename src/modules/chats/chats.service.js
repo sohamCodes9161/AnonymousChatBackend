@@ -226,6 +226,27 @@ export async function listMyChats(userId) {
   const senders = await User.find({ _id: { $in: senderIds } }).select('displayName');
   const senderNameById = new Map(senders.map((u) => [u._id.toString(), u.displayName]));
 
+  // Unread badge counts: messages from others after my read position
+  // (and after "clear chat"), capped at 100 so a huge backlog costs one
+  // bounded query per chat rather than a full count.
+  const unreadByChat = new Map(
+    await Promise.all(
+      chats.map(async (chat) => {
+        const m = membershipByChat.get(chat._id.toString());
+        const filter = {
+          chatId: chat._id,
+          senderId: { $ne: userId },
+          status: { $ne: 'deleted' },
+          deletedFor: { $ne: userId },
+        };
+        if (m.lastReadMessageId) filter._id = { $gt: m.lastReadMessageId };
+        if (m.clearedBefore) filter.createdAt = { $gte: m.clearedBefore };
+        const count = await Message.countDocuments(filter).limit(100);
+        return [chat._id.toString(), count];
+      })
+    )
+  );
+
   return chats.map((chat) => {
     const chatIdStr = chat._id.toString();
     const membership = membershipByChat.get(chatIdStr);
@@ -279,6 +300,7 @@ export async function listMyChats(userId) {
       },
       otherParticipant,
       lastMessageSenderName,
+      unreadCount: unreadByChat.get(chatIdStr) ?? 0,
     };
   });
 }
